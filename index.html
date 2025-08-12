@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Интерактивные графики зарплаты — старая vs новая</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- Plotly CDN -->
+<script src="https://cdn.plot.ly/plotly-2.27.1.min.js"></script>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; margin: 16px; }
+  .controls { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-bottom:8px; }
+  label { display:flex; gap:6px; align-items:center; }
+  input[type=number] { width:120px; }
+  #plots { display:grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap:12px; margin-top:12px; }
+  .plot-card { border:1px solid #ddd; border-radius:8px; padding:8px; box-shadow: 0 2px 6px rgba(0,0,0,0.04); background:#fff; }
+  .plot-title { font-weight:700; margin-bottom:6px; }
+  .big-plot { width:100%; height:500px; }
+  .small-plot { width:100%; height:320px; }
+  button { padding:6px 10px; border-radius:6px; cursor:pointer; }
+  .result { margin-top:8px; font-size:16px; }
+  .controls-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .actions { margin-left:auto; }
+  @media (max-width:720px){ .big-plot{height:360px} .small-plot{height:260px} }
+</style>
+</head>
+<body>
+<h1>Интерактивные графики зарплаты — старая vs новая</h1>
+<p>Выберите точку и смену, введите выручку (лимит 35 000 ₽). На графике — 2 линии: зарплата по старой и по новой системам. Можно также отобразить все графики сразу.</p>
+
+<div class="controls">
+  <div class="controls-row">
+    <label>Кофейня:
+      <select id="shop"></select>
+    </label>
+    <label>Смена:
+      <select id="shift">
+        <option value="дневная">дневная</option>
+        <option value="ночная">ночная</option>
+      </select>
+    </label>
+    <label>Выручка, ₽:
+      <input id="revenue" type="number" value="19600" min="0" max="35000" step="1">
+    </label>
+    <button id="calc">Посчитать</button>
+  </div>
+  <div class="actions">
+    <button id="showAll">Показать все графики</button>
+    <button id="hideAll" style="display:none">Скрыть все</button>
+  </div>
+</div>
+
+<div id="result" class="result"></div>
+
+<hr>
+
+<h2>Граф</h2>
+<div id="mainPlot" class="plot-card">
+  <div class="plot-title" id="mainTitle"></div>
+  <div id="bigPlotDiv" class="big-plot"></div>
+</div>
+
+<hr>
+<h2>Все точки и смены</h2>
+<div id="plots"></div>
+
+<script>
+// --- data (copied from original calculator) ---
+const data = {"shops": ["OLD 223", "OLD 53", "OLD 89", "OLD 9/11"], "old_bases": {"OLD 89": {"дневная": 900.0, "ночная": 1150.0}, "OLD 9/11": {"дневная": 900.0, "ночная": 900.0}, "OLD 53": {"дневная": 900.0, "ночная": 900.0}, "OLD 223": {"дневная": 1000.0, "ночная": 1500.0}}, "new_bases": {"OLD 89": {"дневная": 1800.0, "ночная": 2000.0}, "OLD 9/11": {"дневная": 1700.0, "ночная": 2000.0}, "OLD 53": {"дневная": 1500.0, "ночная": 1800.0}, "OLD 223": {"дневная": 1600.0, "ночная": 1900.0}}, "premium_vals": [100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0, 900.0, 1000.0], "thresholds_group1": [2500.0, 4000.0, 5000.0, 8000.0, 9000.0, 10000.0, 11000.0, 12000.0, 13000.0, 14000.0], "thresholds_group2": [1700.0, 2500.0, 3500.0, 4000.0, 5000.0, 6000.0, 7000.0, 8000.0, 9000.0, 10000.0], "plot_files": {"OLD 223__дневная": "OLD_223_дневная.png", "OLD 223__ночная": "OLD_223_ночная.png", "OLD 53__дневная": "OLD_53_дневная.png", "OLD 53__ночная": "OLD_53_ночная.png", "OLD 89__дневная": "OLD_89_дневная.png", "OLD 89__ночная": "OLD_89_ночная.png", "OLD 9/11__дневная": "OLD_9_11_дневная.png", "OLD 9/11__ночная": "OLD_9_11_ночная.png"}};
+
+// Populate shop selector
+const shopSel = document.getElementById('shop');
+data.shops.forEach(s => { let opt = document.createElement('option'); opt.value = s; opt.text = s; shopSel.appendChild(opt); });
+shopSel.value = data.shops[0];
+
+function computeOldPremium(shop, revenue) {
+    revenue = Number(revenue);
+    let thresholds = (shop === 'OLD 89' || shop === 'OLD 223') ? data.thresholds_group1 : data.thresholds_group2;
+    const premiums = data.premium_vals;
+    if (revenue < thresholds[0]) return 0;
+    let idx = 0;
+    for (let i=0;i<thresholds.length;i++) if (revenue >= thresholds[i]) idx=i;
+    let base = premiums[idx];
+    if (idx === thresholds.length-1) {
+        let extra = revenue - thresholds[thresholds.length-1];
+        if (extra >= 0) base += 100 * Math.floor(extra/1000);
+    }
+    return base;
+}
+
+// Build revenue axis
+const MAX_REV = 35000;
+function buildRevenueArray(step=100){
+  const arr = [];
+  for(let r=0; r<=MAX_REV; r+=step) arr.push(r);
+  return arr;
+}
+
+// Compute salary arrays for a given shop and shift
+function salarySeries(shop, shift, revenueArr){
+  const oldBase = (data.old_bases[shop] && data.old_bases[shop][shift]) ? data.old_bases[shop][shift] : null;
+  const newBase = (data.new_bases[shop] && data.new_bases[shop][shift]) ? data.new_bases[shop][shift] : null;
+  if (oldBase==null || newBase==null) return null;
+  const oldS = [];
+  const newS = [];
+  for(const r of revenueArr){
+    const oldPrem = computeOldPremium(shop, r);
+    oldS.push(oldBase + oldPrem);
+    newS.push(newBase + 0.05 * r);
+  }
+  return {old: oldS, new: newS};
+}
+
+// Render main interactive plot for currently selected shop & shift
+const mainDiv = document.getElementById('bigPlotDiv');
+const mainTitle = document.getElementById('mainTitle');
+
+function renderMainPlot(shop, shift, revenuePoint=null){
+  const revs = buildRevenueArray(100);
+  const series = salarySeries(shop, shift, revs);
+  if (!series) {
+    mainTitle.innerText = 'Нет данных для выбранных параметров.';
+    mainDiv.innerHTML = '';
+    return;
+  }
+  mainTitle.innerText = `${shop} — ${shift}`;
+  const traceOld = {
+    x: revs, y: series.old, mode:'lines', name:'Старая система', hovertemplate: '%{x:.0f} ₽ → %{y:.0f} ₽<extra></extra>'
+  };
+  const traceNew = {
+    x: revs, y: series.new, mode:'lines', name:'Новая система (ставка + 5%)', hovertemplate: '%{x:.0f} ₽ → %{y:.0f} ₽<extra></extra>'
+  };
+  const traces = [traceOld, traceNew];
+  const layout = {
+    margin:{t:30,r:20,l:60,b:60},
+    xaxis:{title:'Выручка, ₽', tickformat:','},
+    yaxis:{title:'Зарплата, ₽', tickformat:','},
+    legend:{orientation:'h', x:0.02, y:1.12}
+  };
+  Plotly.newPlot(mainDiv, traces, layout, {responsive:true});
+  // If a revenue point provided, add marker and update result
+  if (revenuePoint !== null){
+    const p = Number(revenuePoint);
+    const oldPrem = computeOldPremium(shop, p);
+    const oldTotal = (data.old_bases[shop][shift] + oldPrem);
+    const newTotal = (data.new_bases[shop][shift] + 0.05 * p);
+    // Add marker traces
+    const ptOld = { x:[p], y:[oldTotal], mode:'markers+text', name:'Старая (точка)', text:[Math.round(oldTotal)+' ₽'], textposition:'top center', marker:{size:10, symbol:'circle'} };
+    const ptNew = { x:[p], y:[newTotal], mode:'markers+text', name:'Новая (точка)', text:[Math.round(newTotal)+' ₽'], textposition:'bottom center', marker:{size:10, symbol:'diamond'} };
+    Plotly.addTraces(mainDiv, [ptOld, ptNew]);
+    // Update result box
+    document.getElementById('result').innerHTML = `<b>Результат при выручке ${p.toLocaleString()} ₽:</b><br>
+      Старая система: ставка ${data.old_bases[shop][shift]} ₽ + премия ${oldPrem} ₽ = <b>${Math.round(oldTotal)} ₽</b><br>
+      Новая система: ставка ${data.new_bases[shop][shift]} ₽ + 5% от выручки = <b>${Math.round(newTotal)} ₽</b>`;
+  } else {
+    document.getElementById('result').innerText = '';
+  }
+}
+
+// Bind compute button
+document.getElementById('calc').onclick = () => {
+  const shop = shopSel.value;
+  const shift = document.getElementById('shift').value;
+  const revenue = Number(document.getElementById('revenue').value || 0);
+  if (revenue < 0 || revenue > MAX_REV) {
+    alert('Введите выручку в диапазоне 0–35000 ₽.');
+    return;
+  }
+  renderMainPlot(shop, shift, revenue);
+};
+
+// Pre-render main plot initially
+renderMainPlot(shopSel.value, document.getElementById('shift').value, Number(document.getElementById('revenue').value));
+
+// --- All plots grid ---
+const plotsDiv = document.getElementById('plots');
+let allRendered = false;
+
+function createAllPlots(){
+  plotsDiv.innerHTML = '';
+  const revs = buildRevenueArray(200); // coarser step for thumbnails
+  for (const shop of data.shops){
+    for (const shift of ['дневная','ночная']){
+      const card = document.createElement('div');
+      card.className = 'plot-card';
+      const title = document.createElement('div');
+      title.className = 'plot-title';
+      title.innerText = `${shop} — ${shift}`;
+      const pdiv = document.createElement('div');
+      pdiv.className = 'small-plot';
+      // add click to open into main plot
+      pdiv.style.cursor = 'pointer';
+      pdiv.onclick = () => {
+        shopSel.value = shop;
+        document.getElementById('shift').value = shift;
+        renderMainPlot(shop, shift, Number(document.getElementById('revenue').value));
+        window.scrollTo({top:0, behavior:'smooth'});
+      };
+      card.appendChild(title);
+      card.appendChild(pdiv);
+      plotsDiv.appendChild(card);
+      const series = salarySeries(shop, shift, revs);
+      if (!series) continue;
+      const tOld = { x: revs, y: series.old, mode:'lines', name:'Старая' };
+      const tNew = { x: revs, y: series.new, mode:'lines', name:'Новая' };
+      const layout = { margin:{t:30,l:50,b:40}, xaxis:{title:'Выручка, ₽'}, yaxis:{title:'Зарплата, ₽'}, showlegend:false };
+      Plotly.newPlot(pdiv, [tOld,tNew], layout, {displayModeBar:false, responsive:true});
+    }
+  }
+}
+
+// Show/hide all handlers
+document.getElementById('showAll').onclick = () => {
+  if (!allRendered) createAllPlots();
+  allRendered = true;
+  document.getElementById('showAll').style.display = 'none';
+  document.getElementById('hideAll').style.display = 'inline-block';
+  document.getElementById('plots').style.display = 'grid';
+};
+
+document.getElementById('hideAll').onclick = () => {
+  document.getElementById('plots').style.display = 'none';
+  document.getElementById('showAll').style.display = 'inline-block';
+  document.getElementById('hideAll').style.display = 'none';
+};
+
+// By default hide all to keep page lightweight. User clicks to render.
+document.getElementById('plots').style.display='none';
+
+</script>
+</body>
+</html>
