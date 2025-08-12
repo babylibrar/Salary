@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Интерактивные графики зарплаты — старая vs новая (обновлённо)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- Plotly CDN -->
+<script src="https://cdn.plot.ly/plotly-2.27.1.min.js"></script>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; margin: 16px; }
+  .controls { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-bottom:8px; }
+  label { display:flex; gap:6px; align-items:center; }
+  input[type=number] { width:140px; }
+  #plots { display:grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap:12px; margin-top:12px; }
+  .plot-card { border:1px solid #ddd; border-radius:8px; padding:8px; box-shadow: 0 2px 6px rgba(0,0,0,0.04); background:#fff; }
+  .plot-title { font-weight:700; margin-bottom:6px; }
+  .big-plot { width:100%; height:500px; }
+  .small-plot { width:100%; height:320px; }
+  button { padding:6px 10px; border-radius:6px; cursor:pointer; }
+  .result { margin-top:8px; font-size:16px; }
+  .controls-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .actions { margin-left:auto; }
+  @media (max-width:720px){ .big-plot{height:360px} .small-plot{height:260px} }
+</style>
+</head>
+<body>
+<h1>Интерактивные графики зарплаты — старая vs новая</h1>
+<p>Выберите точку и смену, введите выручку (лимит 50 000 ₽). На графике — 2 линии: зарплата по старой и по новой системам. Можно также отобразить все графики сразу.</p>
+
+<div class="controls">
+  <div class="controls-row">
+    <label>Кофейня:
+      <select id="shop"></select>
+    </label>
+    <label>Смена:
+      <select id="shift"></select>
+    </label>
+    <label>Выручка, ₽:
+      <input id="revenue" type="number" value="19600" min="0" max="50000" step="1">
+    </label>
+    <button id="calc">Посчитать</button>
+  </div>
+  <div class="actions">
+    <button id="showAll">Показать все графики</button>
+    <button id="hideAll" style="display:none">Скрыть все</button>
+  </div>
+</div>
+
+<div id="result" class="result"></div>
+
+<hr>
+
+<h2>Граф</h2>
+<div id="mainPlot" class="plot-card">
+  <div class="plot-title" id="mainTitle"></div>
+  <div id="bigPlotDiv" class="big-plot"></div>
+</div>
+
+<hr>
+<h2>Все точки и смены</h2>
+<div id="plots"></div>
+
+<script>
+// --- data (updated with new shop "NY") ---
+const data = {
+  "shops": ["OLD 223", "OLD 53", "OLD 89", "OLD 9/11", "NY"],
+  "shifts_by_shop": {
+    "OLD 223": ["дневная","ночная"],
+    "OLD 53": ["дневная","ночная"],
+    "OLD 89": ["дневная","ночная"],
+    "OLD 9/11": ["дневная","ночная"],
+    "NY": ["1","2","3","барбекер"]
+  },
+  "old_bases": {
+    "OLD 89": {"дневная": 900.0, "ночная": 1150.0},
+    "OLD 9/11": {"дневная": 900.0, "ночная": 900.0},
+    "OLD 53": {"дневная": 900.0, "ночная": 900.0},
+    "OLD 223": {"дневная": 1000.0, "ночная": 1500.0},
+    "NY": {"1": 1000.0, "2":700.0, "3":1100.0, "барбекер":1600.0}
+  },
+  "new_bases": {
+    "OLD 89": {"дневная": 1800.0, "ночная": 2000.0},
+    "OLD 9/11": {"дневная": 1700.0, "ночная": 2000.0},
+    "OLD 53": {"дневная": 1500.0, "ночная": 1800.0},
+    "OLD 223": {"дневная": 1600.0, "ночная": 1900.0},
+    "NY": {"1":1200.0, "2":1000.0, "3":1300.0, "барбекер":1800.0}
+  },
+  // legacy group thresholds kept for original shops
+  "premium_vals": [100,200,300,400,500,600,700,800,900,1000],
+  "thresholds_group1": [2500,4000,5000,8000,9000,10000,11000,12000,13000,14000],
+  "thresholds_group2": [1700,2500,3500,4000,5000,6000,7000,8000,9000,10000],
+  // New: per-shop/shift premium configurations (for old system)
+  "old_prem_configs": {
+    "NY": {
+      "1": {
+        "thresholds": [1700,2500,4000,6000,8000,9000,10000,11000,12000,13000],
+        "premiums" : [100,200,300,400,500,600,700,800,900,1000],
+        "extra_unit": 1000
+      },
+      "2": {
+        "thresholds": [1700,2500,4000,6000,8000,9000,10000,11000,12000,13000],
+        "premiums" : [100,200,300,400,500,600,700,800,900,1000],
+        "extra_unit": 1000
+      },
+      "3": {
+        "thresholds": [1700,2500,4000,6000,8000,9000,10000,11000,12000,13000],
+        "premiums" : [100,200,300,400,500,600,700,800,900,1000],
+        "extra_unit": 1000
+      },
+      "барбекер": {
+        "thresholds": [10000,15000,20000,25000,30000,35000,40000,45000],
+        "premiums" : [100,200,300,400,500,600,700,800],
+        "extra_unit": 5000
+      }
+    }
+  }
+};
+
+// Populate shop selector
+const shopSel = document.getElementById('shop');
+const shiftSel = document.getElementById('shift');
+data.shops.forEach(s => { let opt = document.createElement('option'); opt.value = s; opt.text = s; shopSel.appendChild(opt); });
+shopSel.value = data.shops[0];
+
+// Update shift options when shop changes
+function updateShiftOptions(shop) {
+  const shifts = data.shifts_by_shop[shop] || ["дневная","ночная"];
+  shiftSel.innerHTML = '';
+  shifts.forEach(s => { let op = document.createElement('option'); op.value = s; op.text = s; shiftSel.appendChild(op); });
+}
+
+// Compute old premium with support for per-shop configs
+function computeOldPremium(shop, shift, revenue) {
+    revenue = Number(revenue);
+    // check per-shop/shift config first
+    if (data.old_prem_configs && data.old_prem_configs[shop] && data.old_prem_configs[shop][shift]) {
+        const cfg = data.old_prem_configs[shop][shift];
+        const thresholds = cfg.thresholds;
+        const premiums = cfg.premiums;
+        if (thresholds.length === 0) return 0;
+        if (revenue < thresholds[0]) return 0;
+        let idx = 0;
+        for (let i=0;i<thresholds.length;i++) if (revenue >= thresholds[i]) idx = i;
+        let base = premiums[idx];
+        const lastTh = thresholds[thresholds.length-1];
+        if (revenue > lastTh && cfg.extra_unit && cfg.extra_unit>0) {
+            const extra = revenue - lastTh;
+            const steps = Math.floor(extra / cfg.extra_unit);
+            if (steps > 0) base += 100 * steps;
+        }
+        return base;
+    }
+    // fallback to legacy logic used previously
+    let thresholds = (shop === 'OLD 89' || shop === 'OLD 223') ? data.thresholds_group1 : data.thresholds_group2;
+    const premiums = data.premium_vals;
+    if (revenue < thresholds[0]) return 0;
+    let idx = 0;
+    for (let i=0;i<thresholds.length;i++) if (revenue >= thresholds[i]) idx=i;
+    let base = premiums[idx];
+    if (idx === thresholds.length-1) {
+        let extra = revenue - thresholds[thresholds.length-1];
+        if (extra >= 0) base += 100 * Math.floor(extra/1000);
+    }
+    return base;
+}
+
+// Build revenue axis
+const MAX_REV = 50000;
+function buildRevenueArray(step=100){
+  const arr = [];
+  for(let r=0; r<=MAX_REV; r+=step) arr.push(r);
+  return arr;
+}
+
+// Compute salary arrays for a given shop and shift
+function salarySeries(shop, shift, revenueArr){
+  const oldBase = (data.old_bases[shop] && data.old_bases[shop][shift]) ? data.old_bases[shop][shift] : null;
+  const newBase = (data.new_bases[shop] && data.new_bases[shop][shift]) ? data.new_bases[shop][shift] : null;
+  if (oldBase==null || newBase==null) return null;
+  const oldS = [];
+  const newS = [];
+  for(const r of revenueArr){
+    const oldPrem = computeOldPremium(shop, shift, r);
+    oldS.push(oldBase + oldPrem);
+    // New system: for NY - барбекер доля остаётся как в старой системе (по таблице),
+    // для все остальных смен/точек — ставка + 5% от выручки
+    if (shop === 'NY' && shift === 'барбекер') {
+      newS.push(newBase + oldPrem);
+    } else {
+      newS.push(newBase + 0.05 * r);
+    }
+  }
+  return {old: oldS, new: newS};
+}
+
+// Render main interactive plot for currently selected shop & shift
+const mainDiv = document.getElementById('bigPlotDiv');
+const mainTitle = document.getElementById('mainTitle');
+
+function renderMainPlot(shop, shift, revenuePoint=null){
+  const revs = buildRevenueArray(100);
+  const series = salarySeries(shop, shift, revs);
+  if (!series) {
+    mainTitle.innerText = 'Нет данных для выбранных параметров.';
+    mainDiv.innerHTML = '';
+    return;
+  }
+  mainTitle.innerText = `${shop} — ${shift}`;
+  const traceOld = {
+    x: revs, y: series.old, mode:'lines', name:'Старая система', hovertemplate: '%{x:.0f} ₽ → %{y:.0f} ₽<extra></extra>'
+  };
+  const traceNew = {
+    x: revs, y: series.new, mode:'lines', name:'Новая система', hovertemplate: '%{x:.0f} ₽ → %{y:.0f} ₽<extra></extra>'
+  };
+  const traces = [traceOld, traceNew];
+  const layout = {
+    margin:{t:30,r:20,l:60,b:60},
+    xaxis:{title:'Выручка, ₽', tickformat:','},
+    yaxis:{title:'Зарплата, ₽', tickformat:','},
+    legend:{orientation:'h', x:0.02, y:1.12}
+  };
+  Plotly.newPlot(mainDiv, traces, layout, {responsive:true});
+  // If a revenue point provided, add marker and update result
+  if (revenuePoint !== null){
+    const p = Number(revenuePoint);
+    const oldPrem = computeOldPremium(shop, shift, p);
+    const oldTotal = (data.old_bases[shop][shift] + oldPrem);
+    let newTotal;
+    if (shop==='NY' && shift==='барбекер') newTotal = (data.new_bases[shop][shift] + oldPrem);
+    else newTotal = (data.new_bases[shop][shift] + 0.05 * p);
+    // Add marker traces
+    const ptOld = { x:[p], y:[oldTotal], mode:'markers+text', name:'Старая (точка)', text:[Math.round(oldTotal)+' ₽'], textposition:'top center', marker:{size:10, symbol:'circle'} };
+    const ptNew = { x:[p], y:[newTotal], mode:'markers+text', name:'Новая (точка)', text:[Math.round(newTotal)+' ₽'], textposition:'bottom center', marker:{size:10, symbol:'diamond'} };
+    Plotly.addTraces(mainDiv, [ptOld, ptNew]);
+    // Update result box
+    document.getElementById('result').innerHTML = `<b>Результат при выручке ${p.toLocaleString()} ₽:</b><br>
+      Старая система: ставка ${data.old_bases[shop][shift]} ₽ + премия ${oldPrem} ₽ = <b>${Math.round(oldTotal)} ₽</b><br>
+      Новая система: ставка ${data.new_bases[shop][shift]} ₽ + ${(shop==='NY' && shift==='барбекер') ? 'такая же премия как в старой системе' : '5% от выручки'} = <b>${Math.round(newTotal)} ₽</b>`;
+  } else {
+    document.getElementById('result').innerText = '';
+  }
+}
+
+// Bind compute button
+document.getElementById('calc').onclick = () => {
+  const shop = shopSel.value;
+  const shift = document.getElementById('shift').value;
+  const revenue = Number(document.getElementById('revenue').value || 0);
+  if (revenue < 0 || revenue > MAX_REV) {
+    alert('Введите выручку в диапазоне 0–' + MAX_REV + ' ₽.');
+    return;
+  }
+  renderMainPlot(shop, shift, revenue);
+};
+
+// When shop changes, update available shifts and re-render
+shopSel.onchange = () => {
+  updateShiftOptions(shopSel.value);
+  // re-render main plot with new shift selection
+  renderMainPlot(shopSel.value, document.getElementById('shift').value, Number(document.getElementById('revenue').value));
+};
+// when shift changed, re-render
+shiftSel.onchange = () => {
+  renderMainPlot(shopSel.value, document.getElementById('shift').value, Number(document.getElementById('revenue').value));
+};
+
+// Pre-render main plot initially
+updateShiftOptions(shopSel.value);
+renderMainPlot(shopSel.value, document.getElementById('shift').value, Number(document.getElementById('revenue').value));
+
+// --- All plots grid ---
+const plotsDiv = document.getElementById('plots');
+let allRendered = false;
+
+function createAllPlots(){
+  plotsDiv.innerHTML = '';
+  const revs = buildRevenueArray(200); // coarser step for thumbnails
+  for (const shop of data.shops){
+    const shifts = data.shifts_by_shop[shop] || ['дневная','ночная'];
+    for (const shift of shifts){
+      const card = document.createElement('div');
+      card.className = 'plot-card';
+      const title = document.createElement('div');
+      title.className = 'plot-title';
+      title.innerText = `${shop} — ${shift}`;
+      const pdiv = document.createElement('div');
+      pdiv.className = 'small-plot';
+      // add click to open into main plot
+      pdiv.style.cursor = 'pointer';
+      pdiv.onclick = () => {
+        shopSel.value = shop;
+        updateShiftOptions(shop);
+        document.getElementById('shift').value = shift;
+        renderMainPlot(shop, shift, Number(document.getElementById('revenue').value));
+        window.scrollTo({top:0, behavior:'smooth'});
+      };
+      card.appendChild(title);
+      card.appendChild(pdiv);
+      plotsDiv.appendChild(card);
+      const series = salarySeries(shop, shift, revs);
+      if (!series) continue;
+      const tOld = { x: revs, y: series.old, mode:'lines', name:'Старая' };
+      const tNew = { x: revs, y: series.new, mode:'lines', name:'Новая' };
+      const layout = { margin:{t:30,l:50,b:40}, xaxis:{title:'Выручка, ₽'}, yaxis:{title:'Зарплата, ₽'}, showlegend:false };
+      Plotly.newPlot(pdiv, [tOld,tNew], layout, {displayModeBar:false, responsive:true});
+    }
+  }
+}
+
+// Show/hide all handlers
+document.getElementById('showAll').onclick = () => {
+  if (!allRendered) createAllPlots();
+  allRendered = true;
+  document.getElementById('showAll').style.display = 'none';
+  document.getElementById('hideAll').style.display = 'inline-block';
+  document.getElementById('plots').style.display = 'grid';
+};
+
+document.getElementById('hideAll').onclick = () => {
+  document.getElementById('plots').style.display = 'none';
+  document.getElementById('showAll').style.display = 'inline-block';
+  document.getElementById('hideAll').style.display = 'none';
+};
+
+// By default hide all to keep page lightweight. User clicks to render.
+document.getElementById('plots').style.display='none';
+
+</script>
+</body>
+</html>
